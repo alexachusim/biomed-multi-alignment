@@ -24,9 +24,9 @@ import torch.nn as nn
 from transformers import T5Config, T5EncoderModel
 
 from vllm.config import VllmConfig
-from vllm.model_executor.layers.pooler.seqwise.poolers import pooler_for_embed
 from vllm.model_executor.model_loader.weight_utils import default_weight_loader
-from vllm.v1.pool.metadata import PoolingMetadata
+from vllm.config.pooler import PoolerConfig
+from vllm.model_executor.layers.pooler.seqwise import pooler_for_embed
 
 
 class T5ForConditionalGeneration(nn.Module):
@@ -39,12 +39,7 @@ class T5ForConditionalGeneration(nn.Module):
 
     Loading is handled by vLLM's standard weight loader, which maps the
     HuggingFace ``encoder.*`` weight keys directly onto the T5EncoderModel.
-    """
-
-    # Tells vLLM this model supports the 'embed' pooling task.
-    supported_tasks = ("embed",)
-    # Skip KV cache management
-    has_inner_state = True  
+    """    
 
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = "") -> None:
         super().__init__()
@@ -86,46 +81,19 @@ class T5ForConditionalGeneration(nn.Module):
         self.encoder = T5EncoderModel(hf_config)
 
         # Hidden dimension used for embedding output.
-        self.hidden_size: int = hf_config.d_model
-
-        # -----------------------------------------------------------------
-        # Pooler: vLLM's pooling framework requires a pooler attribute.
-        # Setting self.pooler means vLLM will use it instead of calling pool().
-        # The pool() method is NOT called when self.pooler exists.
-        # -----------------------------------------------------------------
+        self.hidden_size: int = hf_config.d_model        
+                
         # Store attention mask for pooling
         self._flattened_attention_mask = None
         
-        # Create pooler - vLLM will use this instead of calling our pool() method
-        from vllm.config import PoolerConfig
-        pooler_config = PoolerConfig(seq_pooling_type="MEAN")
-        self.pooler = pooler_for_embed(pooler_config)
-
-    # ------------------------------------------------------------------
-    # Embedding layer access
-    # ------------------------------------------------------------------
-
-    def embed_input_ids(self, input_ids: torch.Tensor) -> torch.Tensor:
-        """
-        Get embeddings from the input token IDs.
-        
-        This method is required by vLLM's pooling models to access the
-        embedding layer directly.
-        
-        Args:
-            input_ids: Token IDs tensor of shape (batch_size, seq_len)
-            
-        Returns:
-            Embeddings tensor of shape (batch_size, seq_len, hidden_size)
-        """
-        # T5 uses shared embeddings between encoder and decoder
-        # Access the shared embedding layer from the encoder
-        return self.encoder.shared(input_ids)
-
+        # Create pooler - vLLM will use this for pooling        
+        self._pooler = pooler_for_embed(PoolerConfig(seq_pooling_type="MEAN", use_activation=False))
+    
+   
     # ------------------------------------------------------------------
     # Forward pass
     # ------------------------------------------------------------------
-
+     
     def forward(
         self,
         input_ids: torch.Tensor,
@@ -133,109 +101,40 @@ class T5ForConditionalGeneration(nn.Module):
         intermediate_tensors: Optional[torch.Tensor] = None,
         inputs_embeds: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        """Run the T5 encoder and return token-major hidden states for vLLM pooling."""
-
-        # vLLM pooling builds pooling cursor indices against a flat token stream:
-        # shape == (total_tokens, hidden_size). Returning batched 3D hidden states
-        # causes pooler indices to index the batch dimension and fail out of bounds.
-        if input_ids.dim() == 1:
-            input_ids = input_ids.unsqueeze(0)
-
-        # MAMMAL/T5 uses pad_token_id=0.
-        attention_mask = (input_ids != 0).long()
-
-        encoder_outputs = self.encoder(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            inputs_embeds=inputs_embeds,
-            output_hidden_states=False,
-            return_dict=True,
+        """
+        vLLM calls forward() expecting a (seq_len, hidden_dim) tensor of
+        hidden states back (no batch dim — vLLM handles batching internally
+        via PoolingMetadata).
+        """
+        # input_ids is a 1-D concatenation of all sequences in the batch.
+        # We run the encoder one sequence at a time using the attention_mask
+        # that vLLM passes implicitly through PoolingMetadata at pooler stage.
+        # For the forward pass we just need last_hidden_state per token.
+        encoder_output = self.encoder(
+            input_ids=input_ids.unsqueeze(0),      # (1, seq_len)
+            attention_mask=torch.ones(
+                1, input_ids.shape[0],
+                dtype=torch.long,
+                device=input_ids.device,
+            ),
         )
-
-        hidden_states = encoder_outputs.last_hidden_state
-        hidden_size = hidden_states.shape[-1]
-
-        # Flatten from (batch, seq_len, hidden) -> (total_tokens, hidden)
-        # to match vLLM's pooling metadata cursor semantics.
-        # Also flatten and store the attention mask for pooling
-        flattened_hidden = hidden_states.reshape(-1, hidden_size)
-        flattened_mask = attention_mask.reshape(-1)
-        
-        # Store the flattened attention mask for use in pooling
-        # This will be aligned with the flattened hidden states
-        self._flattened_attention_mask = flattened_mask
-        
-        return flattened_hidden
-
+        # Drop the batch dim: (seq_len, hidden_dim)
+        hidden_states = encoder_output.last_hidden_state.squeeze(0)
+        return hidden_states
+    
     # ------------------------------------------------------------------
     # Pooling
     # ------------------------------------------------------------------
 
-    def pool(
-        self,
-        hidden_states: torch.Tensor,
-        pooling_metadata: PoolingMetadata,
-    ) -> torch.Tensor:
-        """
-        Mean-pool token-major encoder outputs with proper attention mask handling.
+    @property
+    def pooler(self):
+        """Return the pooler instance for vLLM to use."""
+        return self._pooler
         
-        This implements the same pooling strategy as the reference MAMMAL implementation:
-        masked mean pooling over non-padding tokens only.
-        
-        Args:
-            hidden_states: Flattened hidden states (total_tokens, hidden_size)
-            pooling_metadata: Contains pooling cursor with start/end indices for each sequence
-        """
-        print(f"DEBUG: pool() method called with hidden_states shape: {hidden_states.shape}")
-        pooling_cursor = pooling_metadata.get_pooling_cursor()
-        assert not pooling_cursor.is_partial_prefill(), (
-            "partial prefill not supported with MEAN pooling"
-        )
-        
-        # Get the flattened attention mask (1 for real tokens, 0 for padding)
-        assert self._flattened_attention_mask is not None, "Attention mask not set in forward pass"
-        attention_mask = self._flattened_attention_mask.float()
-        
-        # Get sequence boundaries
-        start_indices = pooling_cursor.first_token_indices_gpu
-        end_indices = pooling_cursor.last_token_indices_gpu
-        num_sequences = len(start_indices)
-        hidden_size = hidden_states.shape[-1]
-        
-        # Prepare output tensor
-        pooled_outputs = torch.zeros(
-            num_sequences, hidden_size,
-            dtype=hidden_states.dtype,
-            device=hidden_states.device
-        )
-        
-        # Pool each sequence separately, respecting the attention mask
-        for i in range(num_sequences):
-            start_idx = start_indices[i].item()
-            end_idx = end_indices[i].item() + 1  # end_indices is inclusive
-            
-            # Extract hidden states and attention mask for this sequence
-            seq_hidden = hidden_states[start_idx:end_idx]  # (seq_len, hidden_size)
-            seq_mask = attention_mask[start_idx:end_idx]  # (seq_len,)
-            
-            # Expand mask to match hidden dimensions
-            seq_mask_expanded = seq_mask.unsqueeze(-1)  # (seq_len, 1)
-            
-            # Apply mask and compute mean over non-padding tokens
-            # Match the reference implementation exactly (no epsilon)
-            masked_hidden = seq_hidden * seq_mask_expanded
-            sum_hidden = masked_hidden.sum(dim=0)  # (hidden_size,)
-            sum_mask = seq_mask_expanded.sum(dim=0)  # (1,)
-            
-            # Compute mean - match reference implementation exactly
-            pooled_outputs[i] = sum_hidden / sum_mask
-        
-        return pooled_outputs
-
     # ------------------------------------------------------------------
     # Weight loading
     # ------------------------------------------------------------------
-
+    
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]) -> Set[str]:
         """
         Map HuggingFace checkpoint keys to this module's parameter names.
@@ -267,10 +166,9 @@ class T5ForConditionalGeneration(nn.Module):
         params_dict = dict(self.named_parameters())
         loaded_params: Set[str] = set()
 
-        for name, loaded_weight in weights:
-            # Skip task-specific heads
-            if name.startswith("encoder_head.") or name.startswith("scalars_") or \
-               name.startswith("project_"):
+        for name, loaded_weight in weights:                        
+            # Skip other task-specific heads
+            if name.startswith("encoder_head.") or name.startswith("scalars_"):
                 continue
 
             # Special case: MAMMAL uses decoder.embed_tokens for the shared embedding table

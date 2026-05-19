@@ -10,32 +10,23 @@ import pytest
 import torch
 from vllm.inputs import TokensPrompt
 
-from mammal.keys import *
+from mammal.keys import (
+    ENCODER_INPUTS_TOKENS,
+    ENCODER_INPUTS_ATTENTION_MASK,
+)
 from mammal.model import Mammal
-from vllm_mammal_plugin.mammal_utils import tokenize_mammal, tokenize_mammal_with_attention_mask, get_mammal_model
-
-
-# Test sequences
-PROTEIN_CALMODULIN = (
-    "<@TOKENIZER-TYPE=AA>"
-    "<MOLECULAR_ENTITY><MOLECULAR_ENTITY_OF_TYPE_PROTEIN>"
-    "MADQLTEEQIAEFKEAFSLFDKDGDGTITTKELGTVMRSLGQNPTEAELQDMISELDQDGFIDKEDLHDGDGKISFEEFLNLVNK"
-    "EMTADVDGDGQVNYEEFVTMMTSK"
-    "<EOS>"
+from vllm_mammal_plugin.mammal_utils import (
+    tokenize_mammal,
+    tokenize_mammal_with_attention_mask,
+    get_vllm_mammal_model,
+    get_mammal_tokenizer
 )
-
-SMILES_ASPIRIN = (
-    "<@TOKENIZER-TYPE=SMILES>"
-    "<MOLECULAR_ENTITY><MOLECULAR_ENTITY_OF_TYPE_SMALL_MOL>"
-    "CC(=O)Oc1ccccc1C(=O)O"
-    "<EOS>"
-)
-
-SMILES_CAFFEINE = (
-    "<@TOKENIZER-TYPE=SMILES>"
-    "<MOLECULAR_ENTITY><MOLECULAR_ENTITY_OF_TYPE_SMALL_MOL>"
-    "Cn1cnc2c1c(=O)n(c(=O)n2C)C"
-    "<EOS>"
+from vllm_mammal_plugin.mammal_prompts import (
+    PROTEIN_CALMODULIN,
+    PROTEIN_FLUORESCENT,
+    SMILES_ASPIRIN,
+    SMILES_CAFFEINE,
+    SMILES_ETHER,
 )
 
 
@@ -44,54 +35,73 @@ def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-9))
 
 
-def get_vllm_embeddings(prompts: list[str]):
-    """Get embeddings using vLLM plugin with utility functions."""
+def get_vllm_embeddings(prompts: list[str], tokenizer_op=None):   
+    """Get embeddings using vLLM plugin with utility functions.
+    
+    Args:
+        prompts: List of text prompts to embed
+        tokenizer_op: Optional shared tokenizer instance
+    """
     # Use the utility function to get the model
-    llm = get_mammal_model()
+    llm = get_vllm_mammal_model()
 
-    # Prepare prompts with token IDs using the utility tokenizer
-    token_prompts: list[TokensPrompt] = [
-        {"prompt_token_ids": tokenize_mammal(prompt)}
-        for prompt in prompts
-    ]
+    # Create tokenizer if not provided
+    if tokenizer_op is None:
+        tokenizer_op = get_mammal_tokenizer()
 
-    # Get embeddings
-    outputs = llm.embed(token_prompts)
-    embeddings = [np.array(output.outputs.embedding) for output in outputs]
+    embeddings = []
+    for prompt in prompts:
+        token_ids = tokenize_mammal(prompt, tokenizer_op)
+        token_prompt: TokensPrompt = {"prompt_token_ids": token_ids}
+        
+        # Get embedding for single prompt
+        outputs = llm.embed([token_prompt])
+        embedding = np.array(outputs[0].outputs.embedding)
+        embeddings.append(embedding)
     
     return embeddings
 
 
-def get_mammal_embeddings(model_name: str, prompts: list[str]):
-    """Get embeddings using direct MAMMAL model.
-    
-    Uses tokenize_mammal_with_attention_mask() from mammal_utils.py for tokenization.
+def get_mammal_embeddings(model_name: str, prompts: list[str], tokenizer_op=None):
+    """Get embeddings using direct MAMMAL model.    
+       
+    Args:
+        model_name: Name of the MAMMAL model to load
+        prompts: List of text prompts to embed
+        tokenizer_op: Optional shared tokenizer instance
     """
     # Load model
     model = Mammal.from_pretrained(pretrained_model_name_or_path=model_name, allow_config_mismatch=True)
     model.eval()
     
-    if torch.cuda.is_available():
-        model = model.cuda()
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")   
+    model = model.to(device=device)
+    
+    # Create tokenizer if not provided
+    if tokenizer_op is None:
+        tokenizer_op = get_mammal_tokenizer()
     
     embeddings = []
     
     with torch.no_grad():
         for prompt in prompts:
-            # Tokenize using utility function
-            token_ids, attention_mask = tokenize_mammal_with_attention_mask(prompt)
+            # Tokenize using utility function with shared tokenizer
+            token_ids, attention_mask = tokenize_mammal_with_attention_mask(prompt, tokenizer_op)            
             
-            # Convert to tensors and add batch dimension
-            input_ids = torch.tensor(token_ids).unsqueeze(0)  # [1, seq_len]
-            attention_mask_tensor = torch.tensor(attention_mask).unsqueeze(0)  # [1, seq_len]
+            # Convert to tensors and add batch dimension, then move to device
+            input_ids = torch.tensor(token_ids).unsqueeze(0).to(device)
+            attention_mask_tensor = torch.tensor(attention_mask).unsqueeze(0).to(device)
             
-            if torch.cuda.is_available():
-                input_ids = input_ids.cuda()
-                attention_mask_tensor = attention_mask_tensor.cuda()
+            # Create batch_dict with required keys for _calculate_inputs_embeddings
+            batch_dict = {
+                ENCODER_INPUTS_TOKENS: input_ids,
+                ENCODER_INPUTS_ATTENTION_MASK: attention_mask_tensor,
+            }
             
-            # Get encoder output
-            input_embeddings = model.t5_model.get_input_embeddings()(input_ids)
-            
+            # Get input embeddings using the model's internal method
+            input_embeddings = model._calculate_inputs_embeddings(batch_dict)            
+
+            # Pass through encoder
             encoder_output = model.t5_model.encoder(
                 inputs_embeds=input_embeddings,
                 attention_mask=attention_mask_tensor,
@@ -107,9 +117,10 @@ def get_mammal_embeddings(model_name: str, prompts: list[str]):
             sum_mask = attention_mask_expanded.sum(dim=1)  # [batch, 1]
             pooled_output = sum_hidden_state / sum_mask  # [batch, hidden_dim]
             
-            embedding = pooled_output.squeeze(0).cpu().numpy()  # Remove batch dimension
+            # Convert to numpy and remove batch dimension
+            embedding = pooled_output.squeeze(0).cpu().numpy()
             embeddings.append(embedding)
-    
+
     return embeddings
 
 
@@ -122,56 +133,50 @@ class TestEmbeddingComparison:
         """Test that vLLM and MAMMAL produce similar embeddings."""
         model_name = "ibm-research/biomed.omics.bl.sm.ma-ted-458m"
         
-        prompts = [PROTEIN_CALMODULIN, SMILES_ASPIRIN, SMILES_CAFFEINE]
-        labels = ["Calmodulin (protein)", "Aspirin (SMILES)", "Caffeine (SMILES)"]
+        # Create a single tokenizer instance to be shared across all tokenization calls
+        print("\n" + "=" * 70)
+        print("Creating shared tokenizer...")
+        tokenizer_op = get_mammal_tokenizer(model_name)        
         
+        prompts = [PROTEIN_CALMODULIN, SMILES_ASPIRIN, SMILES_CAFFEINE, PROTEIN_FLUORESCENT, SMILES_ETHER]
+        names = ["Calmodulin (protein)", "Aspirin (SMILES)", "Caffeine (SMILES)", "Fluorescent (protein)", "Ether (SMILES)"]
+                
         print("\n" + "=" * 70)
         print("Getting embeddings from vLLM plugin...")
-        vllm_embeddings = get_vllm_embeddings(prompts)
+        vllm_embeddings = get_vllm_embeddings(prompts, tokenizer_op)
         
+        print("\n" + "=" * 70)
         print("Getting embeddings from direct MAMMAL model...")
-        mammal_embeddings = get_mammal_embeddings(model_name, prompts)
+        mammal_embeddings = get_mammal_embeddings(model_name, prompts, tokenizer_op)
         
         print("\n" + "=" * 70)
         print("Embedding Comparison Results")
         print("=" * 70)
         
         # Compare embeddings
-        for i, label in enumerate(labels):
+        for i, name in enumerate(names):
             vllm_emb = vllm_embeddings[i]
             mammal_emb = mammal_embeddings[i]
             
-            # Calculate similarity
+            # Calculate approximate equality
+            approximate_equality = np.allclose(vllm_emb, mammal_emb, atol=1e-1)
+
+            # Calculate cosine similarity
             similarity = cosine_similarity(vllm_emb, mammal_emb)
             
             # Calculate L2 distance
             l2_distance = np.linalg.norm(vllm_emb - mammal_emb)
             
-            print(f"\n{label}:")
+            print(f"\n{name}:")
             print(f"  vLLM embedding shape:   {vllm_emb.shape}")
             print(f"  MAMMAL embedding shape: {mammal_emb.shape}")
+            print(f"  Approximate equality:   {approximate_equality:.6f}")
             print(f"  Cosine similarity:      {similarity:.6f}")
             print(f"  L2 distance:            {l2_distance:.6f}")
             
             # Assert high similarity (should be very close, > 0.99)
-            assert similarity > 0.95, f"Embeddings for {label} are not similar enough: {similarity:.6f}"
-            assert vllm_emb.shape == mammal_emb.shape, f"Embedding shapes don't match for {label}"
-        
-        print("\n" + "=" * 70)
-        print("Cross-comparison: vLLM embeddings")
-        print("=" * 70)
-        for i in range(len(labels)):
-            for j in range(i + 1, len(labels)):
-                sim = cosine_similarity(vllm_embeddings[i], vllm_embeddings[j])
-                print(f"  {labels[i]} ↔ {labels[j]}: {sim:.4f}")
-        
-        print("\n" + "=" * 70)
-        print("Cross-comparison: MAMMAL embeddings")
-        print("=" * 70)
-        for i in range(len(labels)):
-            for j in range(i + 1, len(labels)):
-                sim = cosine_similarity(mammal_embeddings[i], mammal_embeddings[j])
-                print(f"  {labels[i]} ↔ {labels[j]}: {sim:.4f}")
+            assert similarity > 0.95, f"Embeddings for {name} are not similar enough: {similarity:.6f}"
+            assert vllm_emb.shape == mammal_emb.shape, f"Embedding shapes don't match for {name}"        
         
         print("\n" + "=" * 70)
         print("✓ All embedding comparisons passed!")

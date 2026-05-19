@@ -10,7 +10,7 @@ readme = "README.md"
 license = { text = "Apache-2.0" }
 requires-python = ">=3.10"
 dependencies = [
-    "vllm>=0.4.0",
+    "vllm>=0.18",
     "torch>=2.0.0",
     "transformers>=4.40.0,<5",
     "biomed-multi-alignment",
