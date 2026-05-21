@@ -119,6 +119,12 @@ def get_mammal_embeddings(model_name: str, prompts: list[str], tokenizer_op=None
             
             # Convert to numpy and remove batch dimension
             embedding = pooled_output.squeeze(0).cpu().numpy()
+
+            # Normalize the embedding (L2 normalization)
+            embedding_norm = np.linalg.norm(embedding)
+            if embedding_norm > 0:
+                embedding = embedding / embedding_norm
+
             embeddings.append(embedding)
 
     return embeddings
@@ -159,7 +165,7 @@ class TestEmbeddingComparison:
             mammal_emb = mammal_embeddings[i]
             
             # Calculate approximate equality
-            approximate_equality = np.allclose(vllm_emb, mammal_emb, atol=1e-1)
+            approximate_equality = np.allclose(vllm_emb, mammal_emb, atol=1e-3)
 
             # Calculate cosine similarity
             similarity = cosine_similarity(vllm_emb, mammal_emb)
@@ -170,7 +176,7 @@ class TestEmbeddingComparison:
             print(f"\n{name}:")
             print(f"  vLLM embedding shape:   {vllm_emb.shape}")
             print(f"  MAMMAL embedding shape: {mammal_emb.shape}")
-            print(f"  Approximate equality:   {approximate_equality:.6f}")
+            print(f"  Approximate equality:   {approximate_equality}")
             print(f"  Cosine similarity:      {similarity:.6f}")
             print(f"  L2 distance:            {l2_distance:.6f}")
             
