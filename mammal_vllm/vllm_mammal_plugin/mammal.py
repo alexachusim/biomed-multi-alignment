@@ -21,12 +21,21 @@ from typing import Iterable, Optional, Set, Tuple
 
 import torch
 import torch.nn as nn
-from transformers import T5Config, T5EncoderModel
+from transformers import T5Config, T5EncoderModel, PretrainedConfig
 
 from vllm.config import VllmConfig
 from vllm.model_executor.model_loader.weight_utils import default_weight_loader
 from vllm.config.pooler import PoolerConfig
 from vllm.model_executor.layers.pooler.seqwise import pooler_for_embed
+
+
+class MammalConfig(PretrainedConfig):
+    """Configuration class for MAMMAL model."""
+    
+    model_type = "t5"
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
 
 class T5ForConditionalGeneration(nn.Module):

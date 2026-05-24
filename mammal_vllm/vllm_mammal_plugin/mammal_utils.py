@@ -5,39 +5,6 @@ from huggingface_hub import snapshot_download
 from vllm import LLM
 
 
-def ensure_model_type_in_config(model_name: str) -> None:
-    """
-    Ensure model_type is at root level of config.json.
-    
-    MAMMAL config has model_type nested under t5_config,
-    which causes vLLM validation to fail. 
-    """    
-    # Download or get cached model path
-    local_dir = snapshot_download(repo_id=model_name)
-    print(f"✓ Model available at {local_dir}")
-    
-    # The local_dir is the actual snapshot directory with the files
-    config_path = Path(local_dir) / "config.json"    
-    if not config_path.exists():
-        print(f"Error: config.json not found at {config_path}")
-        return
-    
-    # Read and check the config
-    with open(config_path, 'r') as f:
-        config = json.load(f)
-    
-    # If model_type is already at root level, we're done
-    if "model_type" in config and config["model_type"] == "t5":
-        return
-    
-    # Add model_type at root level and write back the fixed config
-    config["model_type"] = "t5"    
-    with open(config_path, 'w') as f:
-        json.dump(config, f, indent=2)
-    
-    print(f"✓ Fixed config: ensured model_type='t5' at root level in {config_path}")
-
-
 def get_mammal_tokenizer(model_name: str = "ibm-research/biomed.omics.bl.sm.ma-ted-458m"):
     """Get a MAMMAL tokenizer instance.
     
@@ -114,9 +81,7 @@ def tokenize_mammal_with_attention_mask(text, tokenizer_op=None):
 def get_vllm_mammal_model():
     model_name = "ibm-research/biomed.omics.bl.sm.ma-ted-458m"
     
-    # Fix the config if needed (adds model_type='t5' at root level)
-    ensure_model_type_in_config(model_name)
-
+    
     # -----------------------------------------------------------------------
     # Load the model with the pooling runner.
     # The plugin must be installed (`pip install -e .` inside vllm_mammal/).
@@ -129,7 +94,7 @@ def get_vllm_mammal_model():
         trust_remote_code=True,        # MAMMAL uses custom tokeniser code
         #max_model_len=1024,
         dtype="float16",
-        hf_overrides={"architectures": ["T5ForConditionalGeneration"], "is_encoder_decoder": False, "is_decoder": False, "add_cross_attention": False},
+        #hf_overrides={"architectures": ["T5ForConditionalGeneration"], "is_encoder_decoder": False, "is_decoder": False, "add_cross_attention": False},
         skip_tokenizer_init=True,  # Skip vLLM's tokenizer - we use MAMMAL's custom one
         gpu_memory_utilization=0.4,  # Reduce GPU memory usage to fit in available memory
         enforce_eager=True,  # Disable CUDA graphs to avoid device-side assert errors
