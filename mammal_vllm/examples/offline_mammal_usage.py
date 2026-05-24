@@ -7,10 +7,10 @@ Usage:
 
 import numpy as np
 from vllm_mammal_plugin.mammal_utils import *
-from vllm_mammal_plugin.mammal_prompts import (
+from examples.example_prompts import (
     PROTEIN_CALMODULIN,
     SMILES_ASPIRIN,
-    SMILES_CAFFEINE,
+    GENE_BRCA1,
 )
 from vllm.inputs import TokensPrompt
 
@@ -18,11 +18,11 @@ from vllm.inputs import TokensPrompt
 def main():
     model = get_vllm_mammal_model()
        
-    names = ["Calmodulin (protein)", "Aspirin (SMILES)", "Caffeine (SMILES)"]
+    names = ["Calmodulin (protein)", "Aspirin (SMILES)", "BRCA1 (gene)"]
     prompts: list[TokensPrompt] = [
         {"prompt_token_ids": tokenize_mammal(PROTEIN_CALMODULIN)},
         {"prompt_token_ids": tokenize_mammal(SMILES_ASPIRIN)},
-        {"prompt_token_ids": tokenize_mammal(SMILES_CAFFEINE)},
+        {"prompt_token_ids": tokenize_mammal(GENE_BRCA1)},
     ]
 
     outputs = model.embed(prompts)

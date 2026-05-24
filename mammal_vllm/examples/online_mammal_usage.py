@@ -18,10 +18,10 @@ Then run this script:
 
 import numpy as np
 from openai import OpenAI
-from vllm_mammal_plugin.mammal_prompts import (
+from examples.example_prompts import (
     PROTEIN_CALMODULIN,
     SMILES_ASPIRIN,
-    SMILES_CAFFEINE,
+    GENE_BRCA1,
 )
 
 
@@ -29,8 +29,8 @@ def main():
     client = OpenAI(base_url="http://localhost:8000/v1", api_key="EMPTY")
     model_name = "ibm-research/biomed.omics.bl.sm.ma-ted-458m"
     
-    names = ["Calmodulin (protein)", "Aspirin (SMILES)", "Caffeine (SMILES)"]
-    texts = [PROTEIN_CALMODULIN, SMILES_ASPIRIN, SMILES_CAFFEINE]
+    names = ["Calmodulin (protein)", "Aspirin (SMILES)", "BRCA1 (gene)"]
+    texts = [PROTEIN_CALMODULIN, SMILES_ASPIRIN, GENE_BRCA1]
 
     response = client.embeddings.create(model=model_name, input=texts)
 

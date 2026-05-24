@@ -21,12 +21,14 @@ from vllm_mammal_plugin.mammal_utils import (
     get_vllm_mammal_model,
     get_mammal_tokenizer
 )
-from vllm_mammal_plugin.mammal_prompts import (
+from examples.example_prompts import (
     PROTEIN_CALMODULIN,
     PROTEIN_FLUORESCENT,
     SMILES_ASPIRIN,
     SMILES_CAFFEINE,
     SMILES_ETHER,
+    GENE_MALAT1,
+    GENE_BRCA1, 
 )
 
 
@@ -144,9 +146,9 @@ class TestEmbeddingComparison:
         print("Creating shared tokenizer...")
         tokenizer_op = get_mammal_tokenizer(model_name)        
         
-        prompts = [PROTEIN_CALMODULIN, SMILES_ASPIRIN, SMILES_CAFFEINE, PROTEIN_FLUORESCENT, SMILES_ETHER]
-        names = ["Calmodulin (protein)", "Aspirin (SMILES)", "Caffeine (SMILES)", "Fluorescent (protein)", "Ether (SMILES)"]
-                
+        prompts = [PROTEIN_CALMODULIN, SMILES_ASPIRIN, SMILES_CAFFEINE, PROTEIN_FLUORESCENT, SMILES_ETHER, GENE_MALAT1, GENE_BRCA1]
+        names = ["Calmodulin (protein)", "Aspirin (SMILES)", "Caffeine (SMILES)", "Fluorescent (protein)", "Ether (SMILES)", "Malat1 (gene)", "BRCA1 (gene)"]
+                       
         print("\n" + "=" * 70)
         print("Getting embeddings from vLLM plugin...")
         vllm_embeddings = get_vllm_embeddings(prompts, tokenizer_op)
