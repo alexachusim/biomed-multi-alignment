@@ -17,21 +17,20 @@ Architecture notes
 
 from __future__ import annotations
 
-from typing import Iterable, Optional, Set, Tuple
+from collections.abc import Iterable
 
 import torch
 import torch.nn as nn
-from transformers import T5Config, T5EncoderModel, PretrainedConfig
-
+from transformers import PretrainedConfig, T5Config, T5EncoderModel
 from vllm.config import VllmConfig
-from vllm.model_executor.model_loader.weight_utils import default_weight_loader
 from vllm.config.pooler import PoolerConfig
 from vllm.model_executor.layers.pooler.seqwise import pooler_for_embed
+from vllm.model_executor.model_loader.weight_utils import default_weight_loader
 
 
 class MammalConfig(PretrainedConfig):
     """Configuration class for MAMMAL model."""
-    
+
     model_type = "t5"
 
     def __init__(self, **kwargs):
@@ -48,7 +47,7 @@ class T5ForConditionalGeneration(nn.Module):
 
     Loading is handled by vLLM's standard weight loader, which maps the
     HuggingFace ``encoder.*`` weight keys directly onto the T5EncoderModel.
-    """    
+    """
 
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = "") -> None:
         super().__init__()
@@ -60,18 +59,18 @@ class T5ForConditionalGeneration(nn.Module):
         # Handle nested t5_config structure in MAMMAL config files
         # MAMMAL config has T5 parameters nested under 't5_config' key
         config_dict = hf_config.to_dict()
-        if 't5_config' in config_dict and isinstance(config_dict['t5_config'], dict):
+        if "t5_config" in config_dict and isinstance(config_dict["t5_config"], dict):
             # Use the nested t5_config values
-            t5_config_dict = config_dict['t5_config']
+            t5_config_dict = config_dict["t5_config"]
             # Create a new T5Config from the nested config
             hf_config = T5Config(**t5_config_dict)
-        elif 'd_model' not in config_dict:
+        elif "d_model" not in config_dict:
             # If d_model is not at root level, the config is malformed
             raise ValueError(
                 "MAMMAL config must have T5 parameters either at root level or under 't5_config' key. "
                 f"Found keys: {list(config_dict.keys())}"
             )
-        
+
         # Force encoder-only behavior in the effective config that vLLM inspects.
         # The upstream HF config advertises T5 encoder-decoder architecture, which
         # makes vLLM classify the model as encoder-decoder and route it through
@@ -90,25 +89,26 @@ class T5ForConditionalGeneration(nn.Module):
         self.encoder = T5EncoderModel(hf_config)
 
         # Hidden dimension used for embedding output.
-        self.hidden_size: int = hf_config.d_model        
-                
+        self.hidden_size: int = hf_config.d_model
+
         # Store attention mask for pooling
         self._flattened_attention_mask = None
-        
-        # Create pooler - vLLM will use this for pooling        
-        self._pooler = pooler_for_embed(PoolerConfig(seq_pooling_type="MEAN", use_activation=False))
-    
-   
+
+        # Create pooler - vLLM will use this for pooling
+        self._pooler = pooler_for_embed(
+            PoolerConfig(seq_pooling_type="MEAN", use_activation=False)
+        )
+
     # ------------------------------------------------------------------
     # Forward pass
     # ------------------------------------------------------------------
-     
+
     def forward(
         self,
         input_ids: torch.Tensor,
         positions: torch.Tensor,
-        intermediate_tensors: Optional[torch.Tensor] = None,
-        inputs_embeds: Optional[torch.Tensor] = None,
+        intermediate_tensors: torch.Tensor | None = None,
+        inputs_embeds: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """
         vLLM calls forward() expecting a (seq_len, hidden_dim) tensor of
@@ -120,9 +120,10 @@ class T5ForConditionalGeneration(nn.Module):
         # that vLLM passes implicitly through PoolingMetadata at pooler stage.
         # For the forward pass we just need last_hidden_state per token.
         encoder_output = self.encoder(
-            input_ids=input_ids.unsqueeze(0),      # (1, seq_len)
+            input_ids=input_ids.unsqueeze(0),  # (1, seq_len)
             attention_mask=torch.ones(
-                1, input_ids.shape[0],
+                1,
+                input_ids.shape[0],
                 dtype=torch.long,
                 device=input_ids.device,
             ),
@@ -130,7 +131,7 @@ class T5ForConditionalGeneration(nn.Module):
         # Drop the batch dim: (seq_len, hidden_dim)
         hidden_states = encoder_output.last_hidden_state.squeeze(0)
         return hidden_states
-    
+
     # ------------------------------------------------------------------
     # Pooling
     # ------------------------------------------------------------------
@@ -139,12 +140,12 @@ class T5ForConditionalGeneration(nn.Module):
     def pooler(self):
         """Return the pooler instance for vLLM to use."""
         return self._pooler
-        
+
     # ------------------------------------------------------------------
     # Weight loading
     # ------------------------------------------------------------------
-    
-    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]) -> Set[str]:
+
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
         """
         Map HuggingFace checkpoint keys to this module's parameter names.
 
@@ -152,11 +153,11 @@ class T5ForConditionalGeneration(nn.Module):
           - t5_model.encoder.block.0...
           - t5_model.decoder.embed_tokens.weight (used for encoder.shared)
           - t5_model.decoder.* (which we skip)
-        
+
         Our model wraps T5EncoderModel as self.encoder, so parameters are:
           - encoder.encoder.block.0...
           - encoder.shared.weight
-        
+
         We need to map:
           - t5_model.encoder.* → encoder.encoder.*
           - t5_model.decoder.embed_tokens.weight → encoder.shared.weight
@@ -173,9 +174,9 @@ class T5ForConditionalGeneration(nn.Module):
                 break
 
         params_dict = dict(self.named_parameters())
-        loaded_params: Set[str] = set()
+        loaded_params: set[str] = set()
 
-        for name, loaded_weight in weights:                        
+        for name, loaded_weight in weights:
             # Skip other task-specific heads
             if name.startswith("encoder_head.") or name.startswith("scalars_"):
                 continue
@@ -185,11 +186,13 @@ class T5ForConditionalGeneration(nn.Module):
                 param_name = "encoder.shared.weight"
                 if param_name in params_dict:
                     param = params_dict[param_name]
-                    weight_loader = getattr(param, "weight_loader", default_weight_loader)
+                    weight_loader = getattr(
+                        param, "weight_loader", default_weight_loader
+                    )
                     weight_loader(param, loaded_weight)
                     loaded_params.add(param_name)
                 continue
-            
+
             # Skip other decoder weights
             if name.startswith("t5_model.decoder.") or name.startswith("lm_head."):
                 continue
@@ -198,13 +201,14 @@ class T5ForConditionalGeneration(nn.Module):
             # t5_model.encoder.* → encoder.encoder.*
             if name.startswith("t5_model."):
                 # Strip "t5_model." and prepend "encoder."
-                param_name = "encoder." + name[len("t5_model."):]
-                
+                param_name = "encoder." + name[len("t5_model.") :]
+
                 if param_name in params_dict:
                     param = params_dict[param_name]
-                    weight_loader = getattr(param, "weight_loader", default_weight_loader)
+                    weight_loader = getattr(
+                        param, "weight_loader", default_weight_loader
+                    )
                     weight_loader(param, loaded_weight)
                     loaded_params.add(param_name)
 
         return loaded_params
-   

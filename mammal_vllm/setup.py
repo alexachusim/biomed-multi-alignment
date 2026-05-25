@@ -34,7 +34,7 @@ setup(
         # vLLM >= 0.4 uses 'vllm.general_plugins'
         "vllm.general_plugins": [
             "mammal=vllm_mammal_plugin:register_mammal_model",
-        ],       
+        ],
     },
     classifiers=[
         "Intended Audience :: Science/Research",
@@ -46,7 +46,11 @@ setup(
         "Topic :: Scientific/Engineering :: Artificial Intelligence",
     ],
     keywords=[
-        "vllm", "mammal", "biomed", "drug-discovery",
-        "protein", "t5",
+        "vllm",
+        "mammal",
+        "biomed",
+        "drug-discovery",
+        "protein",
+        "t5",
     ],
 )

@@ -11,7 +11,7 @@ Start the server first:
         --skip_tokenizer_init \
         --gpu_memory_utilization 0.4 \
         --enforce_eager \
-        --no-enable-prefix-caching            
+        --no-enable-prefix-caching
 
 Then run this script:
 
@@ -20,21 +20,22 @@ Then run this script:
 
 import numpy as np
 from openai import OpenAI
+
 from examples.example_prompts import (
+    GENE_BRCA1,
     PROTEIN_CALMODULIN,
     SMILES_ASPIRIN,
-    GENE_BRCA1,
 )
-from vllm_mammal_plugin.mammal_utils import tokenize_mammal
+from vllm_mammal_plugin.tokenization import tokenize_mammal
 
 
 def main():
     client = OpenAI(base_url="http://localhost:8000/v1", api_key="EMPTY")
     model_name = "ibm-research/biomed.omics.bl.sm.ma-ted-458m"
-    
+
     names = ["Calmodulin (protein)", "Aspirin (SMILES)", "BRCA1 (gene)"]
     texts = [PROTEIN_CALMODULIN, SMILES_ASPIRIN, GENE_BRCA1]
-    
+
     # Tokenize the inputs using MAMMAL's custom tokenizer
     tokenized_inputs = [tokenize_mammal(text) for text in texts]
 
@@ -49,8 +50,8 @@ def main():
         emb = np.array(item.embedding)
         embeddings.append(emb)
         print(f"{name:<30}  {emb.shape[0]:>14}")
-        #print (f"Embedding: {name:<30} {emb}")
+        # print (f"Embedding: {name:<30} {emb}")
 
-   
+
 if __name__ == "__main__":
     main()
