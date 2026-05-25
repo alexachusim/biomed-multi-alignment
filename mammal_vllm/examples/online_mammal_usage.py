@@ -5,11 +5,13 @@ This example uses the OpenAI-compatible /v1/embeddings endpoint.
 
 Start the server first:
 
-    vllm serve ibm-research/biomed.omics.bl.sm.ma-ted-458m \\
-        --runner pooling \\
-        --trust-remote-code \\
-        --max-model-len 1024 \\
-        --dtype float16
+    vllm serve ibm-research/biomed.omics.bl.sm.ma-ted-458m \
+        --runner pooling \
+        --trust-remote-code \
+        --skip_tokenizer_init \
+        --gpu_memory_utilization 0.4 \
+        --enforce_eager \
+        --no-enable-prefix-caching            
 
 Then run this script:
 
@@ -23,6 +25,7 @@ from examples.example_prompts import (
     SMILES_ASPIRIN,
     GENE_BRCA1,
 )
+from vllm_mammal_plugin.mammal_utils import tokenize_mammal
 
 
 def main():
@@ -31,8 +34,11 @@ def main():
     
     names = ["Calmodulin (protein)", "Aspirin (SMILES)", "BRCA1 (gene)"]
     texts = [PROTEIN_CALMODULIN, SMILES_ASPIRIN, GENE_BRCA1]
+    
+    # Tokenize the inputs using MAMMAL's custom tokenizer
+    tokenized_inputs = [tokenize_mammal(text) for text in texts]
 
-    response = client.embeddings.create(model=model_name, input=texts)
+    response = client.embeddings.create(model=model_name, input=tokenized_inputs)
 
     print("=" * 60)
     print(f"{'Sequence':<30}  {'Embedding dim':>14}")

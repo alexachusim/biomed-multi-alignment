@@ -3,8 +3,19 @@ tests/test_embedding_comparison.py
 -----------------------------------
 Compare embeddings from vLLM plugin vs direct MAMMAL model.
 This test requires GPU and both vllm-mammal-plugin and mammal packages installed.
+
+Optional: Set COMPARE_ONLINE=true to also compare with online vLLM server.
+To use online comparison, start the server first:
+    vllm serve ibm-research/biomed.omics.bl.sm.ma-ted-458m \
+        --runner pooling \
+        --trust-remote-code \
+        --skip_tokenizer_init \
+        --gpu_memory_utilization 0.4 \
+        --enforce_eager \
+        --no-enable-prefix-caching
 """
 
+import os
 import numpy as np
 import pytest
 import torch
@@ -69,6 +80,37 @@ def get_vllm_embeddings(prompts: list[str], tokenizer_op=None):
         outputs = llm.embed([token_prompt])
         embedding = np.array(outputs[0].outputs.embedding)
         embeddings.append(embedding)
+    
+    return embeddings
+
+
+def get_online_vllm_embeddings(prompts: list[str], tokenizer_op=None, base_url: str = "http://localhost:8000/v1"):
+    """Get embeddings using online vLLM server via OpenAI-compatible API.
+    
+    Args:
+        prompts: List of text prompts to embed
+        tokenizer_op: Optional shared tokenizer instance
+        base_url: Base URL for the vLLM server
+    """
+    try:
+        from openai import OpenAI
+    except ImportError:
+        raise ImportError("openai package is required for online comparison. Install with: pip install openai")
+    
+    # Create tokenizer if not provided
+    if tokenizer_op is None:
+        tokenizer_op = get_mammal_tokenizer()
+    
+    client = OpenAI(base_url=base_url, api_key="EMPTY")
+    model_name = "ibm-research/biomed.omics.bl.sm.ma-ted-458m"
+    
+    # Tokenize the inputs using MAMMAL's custom tokenizer and process each prompt individually 
+    embeddings = []
+    for prompt in prompts:
+        token_ids = tokenize_mammal(prompt, tokenizer_op)
+        response = client.embeddings.create(model=model_name, input=[token_ids])       
+        emb = np.array(response.data[0].embedding)       
+        embeddings.append(emb)
     
     return embeddings
 
@@ -150,21 +192,36 @@ class TestEmbeddingComparison:
         """Test that vLLM and MAMMAL produce similar embeddings."""
         model_name = "ibm-research/biomed.omics.bl.sm.ma-ted-458m"
         
+        # Check if online comparison is requested
+        compare_online = os.environ.get("COMPARE_ONLINE", "").lower() in ("true", "1", "yes")
+        
         # Create a single tokenizer instance to be shared across all tokenization calls
         print("\n" + "=" * 70)
         print("Creating shared tokenizer...")
-        tokenizer_op = get_mammal_tokenizer(model_name)        
+        tokenizer_op = get_mammal_tokenizer(model_name)
         
         prompts = [PROTEIN_CALMODULIN, SMILES_ASPIRIN, SMILES_CAFFEINE, PROTEIN_FLUORESCENT, SMILES_ETHER, GENE_MALAT1, GENE_BRCA1]
         names = ["Calmodulin (protein)", "Aspirin (SMILES)", "Caffeine (SMILES)", "Fluorescent (protein)", "Ether (SMILES)", "Malat1 (gene)", "BRCA1 (gene)"]
                        
         print("\n" + "=" * 70)
-        print("Getting embeddings from vLLM plugin...")
+        print("Getting embeddings from vLLM plugin (offline)...")
         vllm_embeddings = get_vllm_embeddings(prompts, tokenizer_op)
         
         print("\n" + "=" * 70)
         print("Getting embeddings from direct MAMMAL model...")
         mammal_embeddings = get_mammal_embeddings(model_name, prompts, tokenizer_op)
+        
+        # Optionally get online vLLM embeddings
+        online_embeddings = None
+        if compare_online:
+            print("\n" + "=" * 70)
+            print("Getting embeddings from online vLLM server...")
+            try:
+                online_embeddings = get_online_vllm_embeddings(prompts, tokenizer_op)
+                print("✓ Successfully retrieved online embeddings")
+            except Exception as e:
+                print(f"⚠ Warning: Could not get online embeddings: {e}")
+                print("  Continuing with offline comparison only...")
         
         print("\n" + "=" * 70)
         print("Embedding Comparison Results")
@@ -185,19 +242,36 @@ class TestEmbeddingComparison:
             l2_distance = np.linalg.norm(vllm_emb - mammal_emb)
             
             print(f"\n{name}:")
-            print(f"  vLLM embedding shape:   {vllm_emb.shape}")
-            print(f"  MAMMAL embedding shape: {mammal_emb.shape}")
+            print(f"  Offline vLLM comparison:")
+            print(f"  vLLM shape:             {vllm_emb.shape}")
+            print(f"  MAMMAL shape:           {mammal_emb.shape}")
             print(f"  Approximate equality:   {approximate_equality}")
             print(f"  Cosine similarity:      {similarity:.6f}")
             print(f"  L2 distance:            {l2_distance:.6f}")
             
-            # Assert high similarity (should be very close, > 0.99)
+            # If online embeddings are available, compare them too
+            if online_embeddings is not None:
+                online_emb = online_embeddings[i]
+                online_approximate_equality = np.allclose(online_emb, mammal_emb, atol=1e-3)
+                online_similarity = cosine_similarity(online_emb, mammal_emb)                
+                online_l2 = np.linalg.norm(online_emb - mammal_emb)
+                
+                print(f"\n  Online vLLM comparison:")
+                print(f"  vLLM shape:             {online_emb.shape}")
+                print(f"  MAMMAL shape:           {mammal_emb.shape}")
+                print(f"  Approximate equality:   {online_approximate_equality}")
+                print(f"  Cosine similarity:      {online_similarity:.6f}")
+                print(f"  L2 distance:            {online_l2:.6f}")                
+                
+                # Assert online embeddings are also similar
+                assert online_similarity > 0.95, f"Online embeddings for {name} are not similar enough: {online_similarity:.6f}"
+            
+            # Assert high similarity (should be very close, > 0.95)
             assert similarity > 0.95, f"Embeddings for {name} are not similar enough: {similarity:.6f}"
-            assert vllm_emb.shape == mammal_emb.shape, f"Embedding shapes don't match for {name}"        
+            assert vllm_emb.shape == mammal_emb.shape, f"Embedding shapes don't match for {name}"
         
         print("\n" + "=" * 70)
         print("✓ All embedding comparisons passed!")
-        print("=" * 70)
 
 
 if __name__ == "__main__":
