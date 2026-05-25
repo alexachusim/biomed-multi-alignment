@@ -45,14 +45,7 @@ def register_mammal_model() -> None:
         # Check if model_type is missing or if this is your specific model repo
         if "model_type" not in config_dict:
             logger.info("Patching missing 'model_type' into the loaded configuration dictionary")
-            config_dict["model_type"] = "t5"
-            
-        if "architectures" not in config_dict:
-            config_dict["architectures"] = ["T5ForConditionalGeneration"]
-
-        config_dict["is_encoder_decoder"] = False
-        config_dict["is_decoder"] = False  
-        config_dict["add_cross_attention"] = False     
+            config_dict["model_type"] = "t5"          
                 
         return config_dict, kwargs_out
 

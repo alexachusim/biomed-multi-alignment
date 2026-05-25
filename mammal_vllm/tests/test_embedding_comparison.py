@@ -8,6 +8,7 @@ This test requires GPU and both vllm-mammal-plugin and mammal packages installed
 import numpy as np
 import pytest
 import torch
+from vllm import LLM
 from vllm.inputs import TokensPrompt
 
 from mammal.keys import (
@@ -18,7 +19,6 @@ from mammal.model import Mammal
 from vllm_mammal_plugin.mammal_utils import (
     tokenize_mammal,
     tokenize_mammal_with_attention_mask,
-    get_vllm_mammal_model,
     get_mammal_tokenizer
 )
 from examples.example_prompts import (
@@ -44,8 +44,17 @@ def get_vllm_embeddings(prompts: list[str], tokenizer_op=None):
         prompts: List of text prompts to embed
         tokenizer_op: Optional shared tokenizer instance
     """
-    # Use the utility function to get the model
-    llm = get_vllm_mammal_model()
+
+    model_name = "ibm-research/biomed.omics.bl.sm.ma-ted-458m"    
+    llm = LLM(
+        model=model_name,
+        runner="pooling",             # use the pooling / embedding runner
+        trust_remote_code=True,       # MAMMAL uses custom tokenizer code    
+        skip_tokenizer_init=True,     # Skip vLLM's tokenizer - we use MAMMAL's custom one
+        gpu_memory_utilization=0.4,   # Reduce GPU memory usage to fit in available memory
+        enforce_eager=True,           # Disable CUDA graphs to avoid device-side assert errors
+        enable_prefix_caching=False,  # Disable prefix/KV caching  
+    )  
 
     # Create tokenizer if not provided
     if tokenizer_op is None:
