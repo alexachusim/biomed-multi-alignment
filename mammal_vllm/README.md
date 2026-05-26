@@ -16,7 +16,14 @@ MAMMAL is a 458M-parameter T5-style encoder-decoder model trained on over 2 bill
 
 ## Installation
 
-### From source (recommended)
+### Prerequisites
+
+This plugin requires [uv](https://docs.astral.sh/uv/) for package management. If you don't have it installed:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+### From source
 
 ```bash
 # Navigate to the mammal_vllm directory
@@ -97,15 +104,11 @@ Compare embeddings from vLLM plugin vs direct MAMMAL model:
 
 ```bash
 # Basic test (offline vLLM vs direct MAMMAL)
-python tests/test_embedding_comparison.py
+python tests/compare_embeddings.py
 
 # Include online vLLM server comparison (requires server running)
-COMPARE_ONLINE=true python tests/test_embedding_comparison.py
+COMPARE_ONLINE=true python tests/compare_embeddings.py
 ```
-
-See **📄 [`tests/test_embedding_comparison.py`](tests/test_embedding_comparison.py)** for details.
-
----
 
 ## Project Structure
 
@@ -116,12 +119,15 @@ mammal_vllm/
 │   ├── mammal.py            # Model implementation
 │   └── tokenization.py      # Tokenization utilities
 ├── examples/
+│   ├── __init__.py          # Package marker
 │   ├── example_prompts.py   # Pre-formatted example prompts
 │   ├── offline_mammal_usage.py  # Offline inference example
 │   └── online_mammal_usage.py   # Online serving example
 ├── tests/
 │   ├── test_plugin.py       # Unit tests
-│   └── test_embedding_comparison.py  # Integration tests
+│   └── compare_embeddings.py  # Integration tests
+├── __init__.py              # Root package marker
 ├── pyproject.toml           # Project configuration
+├── setup.py                 # Setup script
 └── README.md                # This file
 ```

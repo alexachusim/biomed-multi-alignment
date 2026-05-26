@@ -18,7 +18,6 @@ To use online comparison, start the server first:
 import os
 
 import numpy as np
-import pytest
 import torch
 from mammal.keys import (
     ENCODER_INPUTS_ATTENTION_MASK,
@@ -196,8 +195,6 @@ def get_mammal_embeddings(model_name: str, prompts: list[str], tokenizer_op=None
     return embeddings
 
 
-@pytest.mark.gpu
-@pytest.mark.slow
 class TestEmbeddingComparison:
     """Compare embeddings from vLLM plugin vs direct MAMMAL model."""
 

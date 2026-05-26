@@ -7,14 +7,25 @@ These tests do NOT require a GPU or a running vLLM server.
 
 import pytest
 
-from examples.example_prompts import (
-    GENE_BRCA1,
-    GENE_MALAT1,
-    PROTEIN_CALMODULIN,
-    PROTEIN_FLUORESCENT,
-    SMILES_ASPIRIN,
-    SMILES_CAFFEINE,
-)
+try:
+    from mammal_vllm.examples.example_prompts import (
+        GENE_BRCA1,
+        GENE_MALAT1,
+        PROTEIN_CALMODULIN,
+        PROTEIN_FLUORESCENT,
+        SMILES_ASPIRIN,
+        SMILES_CAFFEINE,
+    )
+except ImportError:
+    # Fallback for when running from mammal_vllm directory
+    from examples.example_prompts import (  # type: ignore[no-redef]
+        GENE_BRCA1,
+        GENE_MALAT1,
+        PROTEIN_CALMODULIN,
+        PROTEIN_FLUORESCENT,
+        SMILES_ASPIRIN,
+        SMILES_CAFFEINE,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -230,6 +241,89 @@ class TestPromptFormatting:
 
         assert "<@TOKENIZER-TYPE=GENE>" in GENE_MALAT1
         assert GENE_MALAT1.endswith("<EOS>")
+
+
+# ---------------------------------------------------------------------------
+# vLLM Embeddings (requires GPU and vLLM)
+# ---------------------------------------------------------------------------
+class TestVLLMEmbeddings:
+    """Test vLLM embedding generation (requires GPU and vLLM installed)."""
+
+    @pytest.mark.gpu
+    @pytest.mark.slow
+    def test_get_vllm_embeddings(self) -> None:
+        """Test that vLLM can generate embeddings for different modalities."""
+        try:
+            from vllm import LLM
+            from vllm.inputs import TokensPrompt
+
+            from vllm_mammal_plugin.tokenization import (
+                get_mammal_tokenizer,
+                tokenize_mammal,
+            )
+        except ImportError as e:
+            pytest.skip(f"vLLM not available: {e}")
+
+        import numpy as np
+
+        model_name = "ibm-research/biomed.omics.bl.sm.ma-ted-458m"
+
+        # Initialize vLLM model
+        llm = LLM(
+            model=model_name,
+            runner="pooling",
+            trust_remote_code=True,
+            skip_tokenizer_init=True,
+            gpu_memory_utilization=0.4,
+            enforce_eager=True,
+            enable_prefix_caching=False,
+        )
+
+        # Get tokenizer
+        tokenizer_op = get_mammal_tokenizer(model_name)
+
+        # Test different modalities
+        test_cases = [
+            ("protein", PROTEIN_CALMODULIN, "Calmodulin"),
+            ("smiles", SMILES_ASPIRIN, "Aspirin"),
+            ("gene", GENE_BRCA1, "BRCA1"),
+        ]
+
+        embeddings = []
+        for modality, prompt, name in test_cases:
+            # Tokenize
+            token_ids = tokenize_mammal(prompt, tokenizer_op)
+            token_prompt: TokensPrompt = {"prompt_token_ids": token_ids}
+
+            # Get embedding
+            outputs = llm.embed([token_prompt])
+            embedding = np.array(outputs[0].outputs.embedding)
+            embeddings.append(embedding)
+
+            # Verify embedding properties
+            assert embedding.shape == (
+                768,
+            ), f"{name} embedding has wrong shape: {embedding.shape}"
+            assert not np.isnan(embedding).any(), f"{name} embedding contains NaN"
+            assert not np.isinf(embedding).any(), f"{name} embedding contains Inf"
+
+            # Check if normalized (L2 norm should be close to 1)
+            norm = np.linalg.norm(embedding)
+            assert 0.99 < norm < 1.01, f"{name} embedding not normalized: norm={norm}"
+
+            print(f"✓ {name} ({modality}): shape={embedding.shape}, norm={norm:.6f}")
+
+        # Verify different modalities produce different embeddings
+        for i in range(len(embeddings)):
+            for j in range(i + 1, len(embeddings)):
+                cosine_sim = np.dot(embeddings[i], embeddings[j])
+                # Different modalities should have low similarity
+                assert (
+                    cosine_sim < 0.9
+                ), f"Embeddings {i} and {j} are too similar: {cosine_sim:.6f}"
+                print(
+                    f"✓ Embeddings {i} and {j} are distinct: similarity={cosine_sim:.6f}"
+                )
 
 
 # ---------------------------------------------------------------------------

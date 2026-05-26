@@ -141,6 +141,24 @@ class T5ForConditionalGeneration(nn.Module):
         """Return the pooler instance for vLLM to use."""
         return self._pooler
 
+    def embed_input_ids(
+        self,
+        input_ids: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Embed input_ids using the encoder's embedding layer.
+
+        This method is called by vLLM's pooling interface to get embeddings
+        from input token IDs before passing them through the model.
+
+        Args:
+            input_ids: Token IDs tensor of shape (batch_size, seq_len)
+
+        Returns:
+            Embedded tokens of shape (batch_size, seq_len, hidden_size)
+        """
+        return self.encoder.shared(input_ids)
+
     # ------------------------------------------------------------------
     # Weight loading
     # ------------------------------------------------------------------
