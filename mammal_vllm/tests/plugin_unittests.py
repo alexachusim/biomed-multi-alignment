@@ -2,14 +2,12 @@
 Unit tests for the mammal plugin.
 These tests do NOT require a running vLLM server.
 """
+
+import numpy as np
 import pytest
 from vllm import LLM
 from vllm.inputs import TokensPrompt
-from vllm_mammal_plugin.tokenization import (
-    get_mammal_tokenizer,
-    tokenize_mammal,
-)        
-import numpy as np
+
 from examples.example_prompts import (  # type: ignore[no-redef]
     GENE_BRCA1,
     GENE_MALAT1,
@@ -18,6 +16,11 @@ from examples.example_prompts import (  # type: ignore[no-redef]
     SMILES_ASPIRIN,
     SMILES_CAFFEINE,
 )
+from vllm_mammal_plugin.tokenization import (
+    get_mammal_tokenizer,
+    tokenize_mammal,
+)
+
 
 # ---------------------------------------------------------------------------
 # Plugin registration
@@ -239,7 +242,7 @@ class TestPromptFormatting:
 # ---------------------------------------------------------------------------
 class TestVLLMEmbeddings:
     """Test vLLM embedding generation (requires GPU and vLLM installed)."""
-    
+
     def test_get_vllm_embeddings(self) -> None:
         """Test that vLLM can generate embeddings for different modalities."""
         model_name = "ibm-research/biomed.omics.bl.sm.ma-ted-458m"
@@ -250,7 +253,7 @@ class TestVLLMEmbeddings:
             runner="pooling",
             trust_remote_code=True,
             skip_tokenizer_init=True,
-            gpu_memory_utilization=0.4, 
+            gpu_memory_utilization=0.4,
             enforce_eager=True,
             enable_prefix_caching=False,
         )

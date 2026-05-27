@@ -16,6 +16,7 @@ To use online comparison, start the server first:
 """
 
 import os
+import time
 
 import numpy as np
 import torch
@@ -50,14 +51,20 @@ def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-9))
 
 
-def get_vllm_embeddings(prompts: list[str], tokenizer_op=None):
+def get_vllm_embeddings(
+    prompts: list[str], tokenizer_op=None
+) -> tuple[list, float, float]:
     """Get embeddings using vLLM plugin with utility functions.
 
     Args:
         prompts: List of text prompts to embed
         tokenizer_op: Optional shared tokenizer instance
-    """
 
+    Returns:
+        Tuple of (embeddings, initialization_time, inference_time)
+    """
+    # Time model initialization
+    init_start = time.time()
     llm = LLM(
         model=MODEL_NAME,
         runner="pooling",  # use the pooling / embedding runner
@@ -67,11 +74,14 @@ def get_vllm_embeddings(prompts: list[str], tokenizer_op=None):
         enforce_eager=True,  # Disable CUDA graphs to avoid device-side assert errors
         enable_prefix_caching=False,  # Disable prefix/KV caching
     )
+    init_time = time.time() - init_start
 
     # Create tokenizer if not provided
     if tokenizer_op is None:
         tokenizer_op = get_mammal_tokenizer()
 
+    # Time inference
+    inference_start = time.time()
     embeddings = []
     for prompt in prompts:
         token_ids = tokenize_mammal(prompt, tokenizer_op)
@@ -81,19 +91,23 @@ def get_vllm_embeddings(prompts: list[str], tokenizer_op=None):
         outputs = llm.embed([token_prompt])
         embedding = np.array(outputs[0].outputs.embedding)
         embeddings.append(embedding)
+    inference_time = time.time() - inference_start
 
-    return embeddings
+    return embeddings, init_time, inference_time
 
 
 def get_online_vllm_embeddings(
     prompts: list[str], tokenizer_op=None, base_url: str = "http://localhost:8000/v1"
-):
+) -> tuple[list, float]:
     """Get embeddings using online vLLM server via OpenAI-compatible API.
 
     Args:
         prompts: List of text prompts to embed
         tokenizer_op: Optional shared tokenizer instance
         base_url: Base URL for the vLLM server
+
+    Returns:
+        Tuple of (embeddings, inference_time)
     """
     try:
         from openai import OpenAI
@@ -108,6 +122,8 @@ def get_online_vllm_embeddings(
 
     client = OpenAI(base_url=base_url, api_key="EMPTY")
 
+    # Time inference
+    inference_start = time.time()
     # Tokenize the inputs using MAMMAL's custom tokenizer and process each prompt individually
     embeddings = []
     for prompt in prompts:
@@ -115,18 +131,26 @@ def get_online_vllm_embeddings(
         response = client.embeddings.create(model=MODEL_NAME, input=[token_ids])
         emb = np.array(response.data[0].embedding)
         embeddings.append(emb)
+    inference_time = time.time() - inference_start
 
-    return embeddings
+    return embeddings, inference_time
 
 
-def get_mammal_embeddings(model_name: str, prompts: list[str], tokenizer_op=None):
+def get_mammal_embeddings(
+    model_name: str, prompts: list[str], tokenizer_op=None
+) -> tuple[list, float, float]:
     """Get embeddings using direct MAMMAL model.
 
     Args:
         model_name: Name of the MAMMAL model to load
         prompts: List of text prompts to embed
         tokenizer_op: Optional shared tokenizer instance
+
+    Returns:
+        Tuple of (embeddings, initialization_time, inference_time)
     """
+    # Time model initialization
+    init_start = time.time()
     # Load model
     model = Mammal.from_pretrained(
         pretrained_model_name_or_path=model_name, allow_config_mismatch=True
@@ -135,11 +159,14 @@ def get_mammal_embeddings(model_name: str, prompts: list[str], tokenizer_op=None
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device=device)
+    init_time = time.time() - init_start
 
     # Create tokenizer if not provided
     if tokenizer_op is None:
         tokenizer_op = get_mammal_tokenizer()
 
+    # Time inference
+    inference_start = time.time()
     embeddings = []
 
     with torch.no_grad():
@@ -192,7 +219,9 @@ def get_mammal_embeddings(model_name: str, prompts: list[str], tokenizer_op=None
 
             embeddings.append(embedding)
 
-    return embeddings
+    inference_time = time.time() - inference_start
+
+    return embeddings, init_time, inference_time
 
 
 class TestEmbeddingComparison:
@@ -234,19 +263,33 @@ class TestEmbeddingComparison:
 
         print("\n" + "=" * 70)
         print("Getting embeddings from vLLM plugin (offline)...")
-        vllm_embeddings = get_vllm_embeddings(prompts, tokenizer_op)
+        vllm_embeddings, vllm_init_time, vllm_inference_time = get_vllm_embeddings(
+            prompts, tokenizer_op
+        )
+        print(f"  Initialization time: {vllm_init_time:.3f}s")
+        print(f"  Inference time: {vllm_inference_time:.3f}s")
+        print(f"  Total time: {vllm_init_time + vllm_inference_time:.3f}s")
 
         print("\n" + "=" * 70)
         print("Getting embeddings from direct MAMMAL model...")
-        mammal_embeddings = get_mammal_embeddings(MODEL_NAME, prompts, tokenizer_op)
+        mammal_embeddings, mammal_init_time, mammal_inference_time = (
+            get_mammal_embeddings(MODEL_NAME, prompts, tokenizer_op)
+        )
+        print(f"  Initialization time: {mammal_init_time:.3f}s")
+        print(f"  Inference time: {mammal_inference_time:.3f}s")
+        print(f"  Total time: {mammal_init_time + mammal_inference_time:.3f}s")
 
         # Optionally get online vLLM embeddings
         online_embeddings = None
+        online_inference_time = None
         if compare_online:
             print("\n" + "=" * 70)
             print("Getting embeddings from online vLLM server...")
             try:
-                online_embeddings = get_online_vllm_embeddings(prompts, tokenizer_op)
+                online_embeddings, online_inference_time = get_online_vllm_embeddings(
+                    prompts, tokenizer_op
+                )
+                print(f"  Inference time: {online_inference_time:.3f}s")
                 print("✓ Successfully retrieved online embeddings")
             except Exception as e:
                 print(f"⚠ Warning: Could not get online embeddings: {e}")
@@ -309,6 +352,65 @@ class TestEmbeddingComparison:
 
         print("\n" + "=" * 70)
         print("✓ All embedding comparisons passed!")
+
+        # Display benchmark summary
+        print("\n" + "=" * 70)
+        print("BENCHMARK SUMMARY")
+        print("=" * 70)
+        print(f"Number of prompts: {len(prompts)}")
+        print()
+
+        # Create benchmark table
+        print(
+            f"{'Method':<25} {'Init Time (s)':<15} {'Inference Time (s)':<20} {'Total Time (s)':<15} {'Time per prompt (ms)':<20}"
+        )
+        print("-" * 95)
+
+        # vLLM offline
+        vllm_total = vllm_init_time + vllm_inference_time
+        vllm_per_prompt = (vllm_inference_time / len(prompts)) * 1000
+        print(
+            f"{'vLLM (offline)':<25} {vllm_init_time:<15.3f} {vllm_inference_time:<20.3f} {vllm_total:<15.3f} {vllm_per_prompt:<20.2f}"
+        )
+
+        # Direct MAMMAL
+        mammal_total = mammal_init_time + mammal_inference_time
+        mammal_per_prompt = (mammal_inference_time / len(prompts)) * 1000
+        print(
+            f"{'Direct MAMMAL':<25} {mammal_init_time:<15.3f} {mammal_inference_time:<20.3f} {mammal_total:<15.3f} {mammal_per_prompt:<20.2f}"
+        )
+
+        # Online vLLM (if available)
+        if online_inference_time is not None:
+            online_per_prompt = (online_inference_time / len(prompts)) * 1000
+            print(
+                f"{'vLLM (online)':<25} {'N/A':<15} {online_inference_time:<20.3f} {online_inference_time:<15.3f} {online_per_prompt:<20.2f}"
+            )
+
+        print()
+        print("Speedup Analysis:")
+        print("-" * 95)
+
+        # Calculate speedups (inference only, since init is one-time cost)
+        if mammal_inference_time > 0:
+            vllm_speedup = mammal_inference_time / vllm_inference_time
+            print(
+                f"  vLLM offline vs Direct MAMMAL: {vllm_speedup:.2f}x {'faster' if vllm_speedup > 1 else 'slower'}"
+            )
+
+        if online_inference_time is not None and mammal_inference_time > 0:
+            online_speedup = mammal_inference_time / online_inference_time
+            print(
+                f"  vLLM online vs Direct MAMMAL:  {online_speedup:.2f}x {'faster' if online_speedup > 1 else 'slower'}"
+            )
+
+        if online_inference_time is not None and vllm_inference_time > 0:
+            online_vs_offline = vllm_inference_time / online_inference_time
+            print(
+                f"  vLLM online vs vLLM offline:   {online_vs_offline:.2f}x {'faster' if online_vs_offline > 1 else 'slower'}"
+            )
+
+        print("\n" + "=" * 70)
 
 
 if __name__ == "__main__":
