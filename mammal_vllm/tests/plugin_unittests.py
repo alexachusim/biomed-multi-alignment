@@ -1,32 +1,23 @@
 """
-tests/test_plugin.py
----------------------
 Unit tests for the mammal plugin.
-These tests do NOT require a GPU or a running vLLM server.
+These tests do NOT require a running vLLM server.
 """
-
 import pytest
-
-try:
-    from mammal_vllm.examples.example_prompts import (
-        GENE_BRCA1,
-        GENE_MALAT1,
-        PROTEIN_CALMODULIN,
-        PROTEIN_FLUORESCENT,
-        SMILES_ASPIRIN,
-        SMILES_CAFFEINE,
-    )
-except ImportError:
-    # Fallback for when running from mammal_vllm directory
-    from examples.example_prompts import (  # type: ignore[no-redef]
-        GENE_BRCA1,
-        GENE_MALAT1,
-        PROTEIN_CALMODULIN,
-        PROTEIN_FLUORESCENT,
-        SMILES_ASPIRIN,
-        SMILES_CAFFEINE,
-    )
-
+from vllm import LLM
+from vllm.inputs import TokensPrompt
+from vllm_mammal_plugin.tokenization import (
+    get_mammal_tokenizer,
+    tokenize_mammal,
+)        
+import numpy as np
+from examples.example_prompts import (  # type: ignore[no-redef]
+    GENE_BRCA1,
+    GENE_MALAT1,
+    PROTEIN_CALMODULIN,
+    PROTEIN_FLUORESCENT,
+    SMILES_ASPIRIN,
+    SMILES_CAFFEINE,
+)
 
 # ---------------------------------------------------------------------------
 # Plugin registration
@@ -248,24 +239,9 @@ class TestPromptFormatting:
 # ---------------------------------------------------------------------------
 class TestVLLMEmbeddings:
     """Test vLLM embedding generation (requires GPU and vLLM installed)."""
-
-    @pytest.mark.gpu
-    @pytest.mark.slow
+    
     def test_get_vllm_embeddings(self) -> None:
         """Test that vLLM can generate embeddings for different modalities."""
-        try:
-            from vllm import LLM
-            from vllm.inputs import TokensPrompt
-
-            from vllm_mammal_plugin.tokenization import (
-                get_mammal_tokenizer,
-                tokenize_mammal,
-            )
-        except ImportError as e:
-            pytest.skip(f"vLLM not available: {e}")
-
-        import numpy as np
-
         model_name = "ibm-research/biomed.omics.bl.sm.ma-ted-458m"
 
         # Initialize vLLM model
@@ -274,7 +250,7 @@ class TestVLLMEmbeddings:
             runner="pooling",
             trust_remote_code=True,
             skip_tokenizer_init=True,
-            gpu_memory_utilization=0.4,
+            gpu_memory_utilization=0.4, 
             enforce_eager=True,
             enable_prefix_caching=False,
         )
