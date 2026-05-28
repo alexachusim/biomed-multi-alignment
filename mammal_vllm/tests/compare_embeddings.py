@@ -82,15 +82,19 @@ def get_vllm_embeddings(
 
     # Time inference
     inference_start = time.time()
-    embeddings = []
-    for prompt in prompts:
-        token_ids = tokenize_mammal(prompt, tokenizer_op)
-        token_prompt: TokensPrompt = {"prompt_token_ids": token_ids}
 
-        # Get embedding for single prompt
-        outputs = llm.embed([token_prompt])
-        embedding = np.array(outputs[0].outputs.embedding)
-        embeddings.append(embedding)
+    # Tokenize all prompts and create batch
+    token_prompts: list[TokensPrompt] = [
+        {"prompt_token_ids": tokenize_mammal(prompt, tokenizer_op)}
+        for prompt in prompts
+    ]
+
+    # Get embeddings for all prompts in a single batch
+    outputs = llm.embed(token_prompts)
+
+    # Extract embeddings from outputs
+    embeddings = [np.array(output.outputs.embedding) for output in outputs]
+
     inference_time = time.time() - inference_start
 
     return embeddings, init_time, inference_time
@@ -124,13 +128,16 @@ def get_online_vllm_embeddings(
 
     # Time inference
     inference_start = time.time()
-    # Tokenize the inputs using MAMMAL's custom tokenizer and process each prompt individually
-    embeddings = []
-    for prompt in prompts:
-        token_ids = tokenize_mammal(prompt, tokenizer_op)
-        response = client.embeddings.create(model=MODEL_NAME, input=[token_ids])
-        emb = np.array(response.data[0].embedding)
-        embeddings.append(emb)
+
+    # Tokenize all prompts using MAMMAL's custom tokenizer
+    token_ids_batch = [tokenize_mammal(prompt, tokenizer_op) for prompt in prompts]
+
+    # Send all tokenized prompts in a single batch request
+    response = client.embeddings.create(model=MODEL_NAME, input=token_ids_batch)
+
+    # Extract embeddings from batch response
+    embeddings = [np.array(data.embedding) for data in response.data]
+
     inference_time = time.time() - inference_start
 
     return embeddings, inference_time

@@ -111,25 +111,79 @@ class T5ForConditionalGeneration(nn.Module):
         inputs_embeds: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """
-        vLLM calls forward() expecting a (seq_len, hidden_dim) tensor of
+        vLLM calls forward() expecting a (total_tokens, hidden_dim) tensor of
         hidden states back (no batch dim — vLLM handles batching internally
         via PoolingMetadata).
+
+        Args:
+            input_ids: Flattened 1-D tensor of shape (total_tokens,) containing
+                      all token IDs from all sequences concatenated together.
+            positions: Flattened 1-D tensor of shape (total_tokens,) containing
+                      position indices for each token.
+
+        Returns:
+            Hidden states tensor of shape (total_tokens, hidden_dim)
         """
-        # input_ids is a 1-D concatenation of all sequences in the batch.
-        # We run the encoder one sequence at a time using the attention_mask
-        # that vLLM passes implicitly through PoolingMetadata at pooler stage.
-        # For the forward pass we just need last_hidden_state per token.
-        encoder_output = self.encoder(
-            input_ids=input_ids.unsqueeze(0),  # (1, seq_len)
-            attention_mask=torch.ones(
-                1,
-                input_ids.shape[0],
-                dtype=torch.long,
-                device=input_ids.device,
-            ),
+        # The input_ids is a 1-D concatenation of all sequences in the batch.
+        # We can't process this as a single sequence because T5's self-attention
+        # would allow tokens from different prompts to attend to each other.
+        # Thus, we batch sequences with padding for efficient parallel processing.
+        # We identify sequence boundaries by detecting position resets
+        # positions looks like: [0,1,2,3,0,1,2,0,1,2,3,4,...]
+        #                        ^seq1^ ^seq2^ ^seq3^
+        position_resets = torch.cat(
+            [
+                torch.tensor(
+                    [0], device=positions.device
+                ),  # First token is always a start
+                torch.where(positions[1:] <= positions[:-1])[0]
+                + 1,  # Find where position decreases or stays same
+            ]
         )
-        # Drop the batch dim: (seq_len, hidden_dim)
-        hidden_states = encoder_output.last_hidden_state.squeeze(0)
+
+        # Split input_ids into individual sequences
+        seq_starts = position_resets.tolist()
+        seq_ends = seq_starts[1:] + [len(input_ids)]
+        sequences = [input_ids[start:end] for start, end in zip(seq_starts, seq_ends)]
+
+        # Find max sequence length for padding
+        max_len = max(len(seq) for seq in sequences)
+        batch_size = len(sequences)
+
+        # Create padded batch tensor and attention mask
+        # Use pad_token_id=0 (T5 uses 0 for padding)
+        padded_input_ids = torch.zeros(
+            batch_size, max_len, dtype=torch.long, device=input_ids.device
+        )
+        attention_mask = torch.zeros(
+            batch_size, max_len, dtype=torch.long, device=input_ids.device
+        )
+
+        # Fill in the sequences and create attention masks
+        for i, seq in enumerate(sequences):
+            seq_len = len(seq)
+            padded_input_ids[i, :seq_len] = seq
+            attention_mask[i, :seq_len] = 1  # 1 for real tokens, 0 for padding
+
+        # Process all sequences in a single batched forward pass
+        encoder_output = self.encoder(
+            input_ids=padded_input_ids,  # (batch_size, max_len)
+            attention_mask=attention_mask,  # (batch_size, max_len)
+        )
+
+        # Extract hidden states and remove padding to reconstruct flattened format
+        # encoder_output.last_hidden_state shape: (batch_size, max_len, hidden_dim)
+        all_hidden_states = []
+        for i, seq in enumerate(sequences):
+            seq_len = len(seq)
+            # Extract only the non-padded hidden states for this sequence
+            seq_hidden_states = encoder_output.last_hidden_state[i, :seq_len, :]
+            all_hidden_states.append(seq_hidden_states)
+
+        # Concatenate all sequences back into flattened format
+        hidden_states = torch.cat(
+            all_hidden_states, dim=0
+        )  # (total_tokens, hidden_dim)
         return hidden_states
 
     # ------------------------------------------------------------------
