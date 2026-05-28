@@ -95,7 +95,8 @@ See [`examples/example_prompts.py`](examples/example_prompts.py) for pre-formatt
 
 ```bash
 # Run all tests
-pytest tests/test_plugin.py -v
+pytest tests/plugin_unittests.py -v
+pytest tests/compare_embeddings.py -v
 ```
 
 ### Run Embedding Comparison Tests
@@ -124,7 +125,7 @@ mammal_vllm/
 │   ├── offline_mammal_usage.py  # Offline inference example
 │   └── online_mammal_usage.py   # Online serving example
 ├── tests/
-│   ├── test_plugin.py       # Unit tests
+│   ├── plugin_unittests.py  # Unit tests
 │   └── compare_embeddings.py  # Integration tests
 ├── __init__.py              # Root package marker
 ├── pyproject.toml           # Project configuration
