@@ -7,6 +7,10 @@ from typing import Any
 
 import torch
 import transformers
+from packaging.version import Version
+
+_TRANSFORMERS_V5 = Version(transformers.__version__) >= Version("5.0")
+
 from fuse.data.utils.collates import CollateDefault
 from fuse.dl.models.heads.common import ClassifierMLP
 from huggingface_hub import ModelHubMixin, snapshot_download
@@ -183,10 +187,18 @@ class Mammal(ModelHubMixin, torch.nn.Module):
             **generate_kwargs,
         )
 
-        MODEL_OUTPUT_SEARCH_TYPES = (
-            transformers.generation.utils.GenerateEncoderDecoderOutput,      # no beam search
-            transformers.generation.utils.GenerateBeamEncoderDecoderOutput,  # beam search
-        )
+        if _TRANSFORMERS_V5:
+            MODEL_OUTPUT_SEARCH_TYPES = (
+                transformers.generation.utils.GenerateEncoderDecoderOutput,      # no beam search
+                transformers.generation.utils.GenerateBeamEncoderDecoderOutput,  # beam search
+            )
+        else:
+            MODEL_OUTPUT_SEARCH_TYPES = (
+                transformers.generation.utils.BeamSearchEncoderDecoderOutput,
+                transformers.generation.utils.GreedySearchEncoderDecoderOutput,
+                transformers.generation.utils.SampleEncoderDecoderOutput,
+                transformers.generation.utils.BeamSampleEncoderDecoderOutput,
+            )
 
         # depending generate_kwargs, different types can be returned from model.generate(...)
         if isinstance(generated_output, MODEL_OUTPUT_SEARCH_TYPES):
@@ -547,9 +559,9 @@ class Mammal(ModelHubMixin, torch.nn.Module):
                     "Warning! You are using random weights! To disable it, make sure to config 'random_weights' to False."
                 )
             else:
-                # lm_head.weight is tied to the shared embedding in newer transformers.
-                # Break the tie before loading so the checkpoint's separate lm_head values don't overwrite (corrupt) the encoder embeddings.
-                if "t5_model.lm_head.weight" in state_dict:
+                if _TRANSFORMERS_V5 and "t5_model.lm_head.weight" in state_dict:
+                    # lm_head.weight is tied to the shared embedding in newer transformers.
+                    # Break the tie before loading so the checkpoint's separate lm_head values don't overwrite (corrupt) the encoder embeddings.
                     t5 = model.t5_model
                     t5.lm_head.weight = torch.nn.Parameter(
                         t5.lm_head.weight.detach().clone()
