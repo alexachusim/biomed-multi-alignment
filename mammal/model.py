@@ -7,20 +7,34 @@ from typing import Any
 
 import torch
 import transformers
-from packaging.version import Version
-
-_TRANSFORMERS_V5 = Version(transformers.__version__) >= Version("5.0")
-
 from fuse.data.utils.collates import CollateDefault
 from fuse.dl.models.heads.common import ClassifierMLP
 from huggingface_hub import ModelHubMixin, snapshot_download
 from huggingface_hub.constants import CONFIG_NAME, SAFETENSORS_SINGLE_FILE
 from omegaconf import DictConfig, OmegaConf
+from packaging.version import Version
 from safetensors.torch import load_file, load_model, save_model
 from transformers import PretrainedConfig, T5Config, T5ForConditionalGeneration
 
 from mammal.keys import *  # noqa
 from mammal.lora import get_lora_model
+
+_TRANSFORMERS_V5 = Version(transformers.__version__) >= Version("5.0")
+
+# Output types returned by T5ForConditionalGeneration.generate() differ between
+# transformers v4 and v5; build the tuple once at import time.
+if _TRANSFORMERS_V5:
+    _MODEL_OUTPUT_SEARCH_TYPES = (
+        transformers.generation.utils.GenerateEncoderDecoderOutput,      # no beam search
+        transformers.generation.utils.GenerateBeamEncoderDecoderOutput,  # beam search
+    )
+else:
+    _MODEL_OUTPUT_SEARCH_TYPES = (  # type: ignore[assignment]
+        transformers.generation.utils.BeamSearchEncoderDecoderOutput,
+        transformers.generation.utils.GreedySearchEncoderDecoderOutput,
+        transformers.generation.utils.SampleEncoderDecoderOutput,
+        transformers.generation.utils.BeamSampleEncoderDecoderOutput,
+    )
 
 
 @dataclass
@@ -187,21 +201,8 @@ class Mammal(ModelHubMixin, torch.nn.Module):
             **generate_kwargs,
         )
 
-        if _TRANSFORMERS_V5:
-            MODEL_OUTPUT_SEARCH_TYPES = (
-                transformers.generation.utils.GenerateEncoderDecoderOutput,  # no beam search
-                transformers.generation.utils.GenerateBeamEncoderDecoderOutput,  # beam search
-            )
-        else:
-            MODEL_OUTPUT_SEARCH_TYPES = (
-                transformers.generation.utils.BeamSearchEncoderDecoderOutput,
-                transformers.generation.utils.GreedySearchEncoderDecoderOutput,
-                transformers.generation.utils.SampleEncoderDecoderOutput,
-                transformers.generation.utils.BeamSampleEncoderDecoderOutput,
-            )
-
         # depending generate_kwargs, different types can be returned from model.generate(...)
-        if isinstance(generated_output, MODEL_OUTPUT_SEARCH_TYPES):
+        if isinstance(generated_output, _MODEL_OUTPUT_SEARCH_TYPES):
             cls_pred = generated_output.sequences
             if "sequences_scores" in generated_output:
                 batch_dict["model.out.sequences_beam_search_scores"] = generated_output[
@@ -228,7 +229,7 @@ class Mammal(ModelHubMixin, torch.nn.Module):
                 )
 
         batch_dict[CLS_PRED] = cls_pred.contiguous()
-        if isinstance(generated_output, MODEL_OUTPUT_SEARCH_TYPES) and hasattr(
+        if isinstance(generated_output, _MODEL_OUTPUT_SEARCH_TYPES) and hasattr(
             generated_output, "scores"
         ):
             batch_dict[LOGITS] = torch.vstack(
