@@ -184,10 +184,8 @@ class Mammal(ModelHubMixin, torch.nn.Module):
         )
 
         MODEL_OUTPUT_SEARCH_TYPES = (
-            transformers.generation.utils.BeamSearchEncoderDecoderOutput,  # ModelOutput
-            transformers.generation.utils.GreedySearchEncoderDecoderOutput,
-            transformers.generation.utils.SampleEncoderDecoderOutput,
-            transformers.generation.utils.BeamSampleEncoderDecoderOutput,
+            transformers.generation.utils.GenerateEncoderDecoderOutput,      # no beam search
+            transformers.generation.utils.GenerateBeamEncoderDecoderOutput,  # beam search
         )
 
         # depending generate_kwargs, different types can be returned from model.generate(...)
@@ -549,6 +547,13 @@ class Mammal(ModelHubMixin, torch.nn.Module):
                     "Warning! You are using random weights! To disable it, make sure to config 'random_weights' to False."
                 )
             else:
+                # lm_head.weight is tied to the shared embedding in newer transformers.
+                # Break the tie before loading so the checkpoint's separate lm_head values don't overwrite (corrupt) the encoder embeddings.
+                if "t5_model.lm_head.weight" in state_dict:
+                    t5 = model.t5_model
+                    t5.lm_head.weight = torch.nn.Parameter(
+                        t5.lm_head.weight.detach().clone()
+                    )
                 # Inject weights to model instance
                 load_model(model, model_safetensors_path, strict=strict)
 
