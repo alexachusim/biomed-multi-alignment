@@ -25,7 +25,7 @@ _TRANSFORMERS_V5 = Version(transformers.__version__) >= Version("5.0")
 # transformers v4 and v5; build the tuple once at import time.
 if _TRANSFORMERS_V5:
     _MODEL_OUTPUT_SEARCH_TYPES = (
-        transformers.generation.utils.GenerateEncoderDecoderOutput,      # no beam search
+        transformers.generation.utils.GenerateEncoderDecoderOutput,  # no beam search
         transformers.generation.utils.GenerateBeamEncoderDecoderOutput,  # beam search
     )
 else:
