@@ -189,7 +189,7 @@ class Mammal(ModelHubMixin, torch.nn.Module):
 
         if _TRANSFORMERS_V5:
             MODEL_OUTPUT_SEARCH_TYPES = (
-                transformers.generation.utils.GenerateEncoderDecoderOutput,      # no beam search
+                transformers.generation.utils.GenerateEncoderDecoderOutput,  # no beam search
                 transformers.generation.utils.GenerateBeamEncoderDecoderOutput,  # beam search
             )
         else:
