@@ -69,7 +69,16 @@ class MammalConfig(PretrainedConfig):
 
         # We want to instantiate each class from it's dict (json), using the parent class logic
         # HF don't support the case where there are nested *different* configs.
-        config_dict["t5_config"] = T5Config.from_dict(config_dict["t5_config"])
+        t5_config_dict = config_dict["t5_config"]
+        t5_config = T5Config.from_dict(t5_config_dict)
+        # transformers>=5 ignores `tie_word_embeddings` when it is supplied through
+        # `from_dict`/kwargs and always falls back to the class default (True). This
+        # model has an *untied* LM head (`lm_head` differs from the input embeddings),
+        # so restore the stored value explicitly - otherwise the model ties `lm_head`
+        # to `shared`, overwriting the real LM-head weights and corrupting generation.
+        if "tie_word_embeddings" in t5_config_dict:
+            t5_config.tie_word_embeddings = t5_config_dict["tie_word_embeddings"]
+        config_dict["t5_config"] = t5_config
         config = cls(**config_dict)
         return config
 
@@ -134,6 +143,15 @@ class Mammal(ModelHubMixin, torch.nn.Module):
         self.config = config
         self.t5_model = T5ForConditionalGeneration(config=self.config.t5_config)
 
+        # transformers>=5 refactored T5 so the encoder/decoder input-embedding
+        # tables are shared with `shared` only when tie_word_embeddings is True.
+        # This model keeps `lm_head` untied (tie_word_embeddings=False) but still
+        # needs the encoder/decoder inputs to use the single shared embedding
+        # table (which `get_input_embeddings()` returns and which the checkpoint
+        # only stores once). Re-establish that sharing explicitly; on transformers
+        # 4.x the encoder/decoder already share `shared`, so this is a no-op.
+        self.t5_model.set_input_embeddings(self.t5_model.get_input_embeddings())
+
         if getattr(self.config, "support_input_scalars", False):
             self.project_input_scalars = torch.nn.Linear(
                 1, self.t5_model.get_input_embeddings().embedding_dim, bias=True
@@ -183,11 +201,13 @@ class Mammal(ModelHubMixin, torch.nn.Module):
             **generate_kwargs,
         )
 
+        # transformers>=5 removed the legacy per-strategy output aliases
+        # (BeamSearch/GreedySearch/Sample/BeamSample*EncoderDecoderOutput). They
+        # collapse into two encoder-decoder classes, which also exist in
+        # transformers 4.x, so this stays compatible with both.
         MODEL_OUTPUT_SEARCH_TYPES = (
-            transformers.generation.utils.BeamSearchEncoderDecoderOutput,  # ModelOutput
-            transformers.generation.utils.GreedySearchEncoderDecoderOutput,
-            transformers.generation.utils.SampleEncoderDecoderOutput,
-            transformers.generation.utils.BeamSampleEncoderDecoderOutput,
+            transformers.generation.utils.GenerateEncoderDecoderOutput,  # greedy + sample
+            transformers.generation.utils.GenerateBeamEncoderDecoderOutput,  # beam + beam-sample
         )
 
         # depending generate_kwargs, different types can be returned from model.generate(...)
