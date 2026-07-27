@@ -3,11 +3,6 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# PyTDC downloads datasets into ./data relative to the cwd (repo root when
-# running example finetunes). Ignore it so downloaded data isn't committed.
-# Anchored so the example's own mammal/examples/*/data/ dirs are unaffected.
-/data/
-
 # C extensions
 *.so
 
