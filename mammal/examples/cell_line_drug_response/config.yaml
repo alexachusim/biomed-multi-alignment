@@ -15,7 +15,7 @@ task:
   data_module_kwargs:
     dataset_name: "GDSC2"  # or "GDSC1"
     dataset_path: null  # TDC will download if not specified
-    limit_samples: null  # Set a number for quick testing on a subset of the data (e.g., 100)
+    limit_samples: 100 #null  # Set a number for quick testing on a subset of the data (e.g., 100)
     batch_size: 8
     encoder_input_max_seq_len: 1500 # max sequence length for encoder input including both genes and smiles tokens
     train_dl_kwargs:
@@ -56,7 +56,7 @@ module:
 
 # PyTorch Lightning Trainer configuration
 trainer:
-  max_epochs: 100
+  max_epochs: 2 # 100
   default_root_dir: ${model_dir}
   accelerator: "auto"
   devices: 1
